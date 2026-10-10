@@ -104,7 +104,12 @@ export class QualityChecker {
     // 6. Reading speed and line length warning
     const durationSec = (line.endMs - line.startMs) / 1000;
     if (durationSec > 0.5) {
-      const cps = vi.length / durationSec;
+      const visibleVi = vi
+        .replace(/\[\[TAG_\d+\]\]/g, '')
+        .replace(/\[\[NL\]\]/g, '\n')
+        .replace(/\{\\[^}]*\}/g, '')
+        .replace(/<\/?(?:i|b|u|font|c|v)[^>]*>/gi, '');
+      const cps = [...visibleVi].length / durationSec;
       if (cps > cpsLimit) {
         issues.push({
           lineId: line.id,

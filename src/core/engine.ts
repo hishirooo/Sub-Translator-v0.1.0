@@ -17,6 +17,8 @@ export class TranslationEngine {
   private status: EngineStatus = 'idle';
   private stopRequested = false;
   private activeWorkers = 0;
+  private inFlightBatches = new Set<Promise<boolean>>();
+  private persistenceQueue: Promise<void> = Promise.resolve();
   private onProjectChange: (project: SubtitleProject) => void;
   private onStatusChange: (status: EngineStatus) => void;
 
@@ -45,7 +47,10 @@ export class TranslationEngine {
   }
 
   public updateProject(project: SubtitleProject) {
+    // Explicit user edits go through the same ordered snapshot/persistence path
+    // as API results; otherwise an older batch's async save can overwrite them.
     this.project = project;
+    this.notifyProjectUpdate();
   }
 
   public updateTerms(terms: DictionaryTerm[]) {
@@ -63,6 +68,12 @@ export class TranslationEngine {
 
   public async start() {
     if (this.status === 'running') return;
+    // A user can press Start while the previous pause is still draining API requests.
+    // Never overlap two runners on the same project.
+    if (this.inFlightBatches.size > 0) {
+      await Promise.allSettled([...this.inFlightBatches]);
+    }
+    if ((this.status as EngineStatus) === 'running') return;
     this.stopRequested = false;
     this.status = 'running';
     this.onStatusChange('running');
@@ -80,7 +91,13 @@ export class TranslationEngine {
         await this.runSequentialLoop();
       }
     } finally {
-      if ((this.status as EngineStatus) !== 'exhausted') {
+      // Even when the scheduler stops/pause is requested, already-sent requests
+      // finish and commit their batch before the runner is considered settled.
+      if (this.inFlightBatches.size > 0) {
+        await Promise.allSettled([...this.inFlightBatches]);
+      }
+      await this.persistenceQueue;
+      if ((this.status as EngineStatus) !== 'exhausted' && !this.stopRequested) {
         this.status = 'idle';
         this.onStatusChange('idle');
       }
@@ -166,6 +183,12 @@ export class TranslationEngine {
         break;
       }
 
+      // No pending batches: wait for in-flight requests instead of spinning on RPM.
+      if (batches.length === 0) {
+        await Promise.race([...this.inFlightBatches]);
+        continue;
+      }
+
       // Check available translation slots across models
       const decision = this.router.selectTranslatorModel();
       if (decision.action === 'exhausted') {
@@ -195,8 +218,11 @@ export class TranslationEngine {
         this.markBatchStatus(batch.lineIds, 'Processing');
         this.activeWorkers++;
 
-        this.executeBatchWithRouter(batch).finally(() => {
+        const task = this.executeBatchWithRouter(batch);
+        this.inFlightBatches.add(task);
+        void task.finally(() => {
           this.activeWorkers--;
+          this.inFlightBatches.delete(task);
         });
       }
 
@@ -302,7 +328,8 @@ export class TranslationEngine {
           continue;
         }
 
-        // Map translations to lines
+        // Map translations to lines. Publish a snapshot immediately after receiving
+        // each batch; do not wait for Lite auto-fix or for all other batches to finish.
         const linesToFix: { line: SubtitleLine; issueMsg: string }[] = [];
         const transMap = new Map<number, string>();
         for (const t of receivedTranslations) {
@@ -312,22 +339,54 @@ export class TranslationEngine {
           }
         }
 
-        for (const lineId of batch.lineIds) {
-          const line = this.project.lines.find(l => l.id === lineId);
-          if (!line || line.isLocked) continue;
+        const inputMap = new Map(batch.itemsToTranslate.map(item => [item.id, item.text]));
+        const getCurrentBatchLines = () => batch.lineIds
+          .map(id => this.project.lines.find(line => line.id === id))
+          .filter((line): line is SubtitleLine => Boolean(line))
+          // Don't replace a manual edit or changed source after a request was sent.
+          .filter(line => !line.isLocked &&
+            (line.status === 'Processing' || line.status === 'Fixing') &&
+            line.cleanedText.replace(/\n/g, '[[NL]]') === inputMap.get(line.id));
+        const batchLines = getCurrentBatchLines();
 
-          const translatedVi = transMap.get(lineId) || '';
-          line.viText = translatedVi;
+        for (const line of batchLines) {
+          const translatedVi = transMap.get(line.id);
+          if (translatedVi !== undefined) {
+            line.viText = translatedVi;
+            line.status = 'Done';
+            line.errorDescription = undefined;
+          } else {
+            // An incomplete response below the heavy-error threshold must never
+            // silently turn into a successful stale/empty subtitle.
+            line.viText = '';
+            line.status = 'Fixing';
+          }
+        }
+        this.notifyProjectUpdate(); // live results visible while other API calls run
+        logger.log({
+          type: 'NHẬN',
+          level: 'info',
+          batchIndex: batch.index,
+          message: `HIỂN THỊ batch #${batch.index} | đã cập nhật ${batchLines.filter(l => l.viText).length}/${batch.lineIds.length} dòng ngay trên bảng.`
+        });
 
-          // Run Layer 1 QC
+        // Yield one turn so React gets a chance to paint before local QC/Lite runs.
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+
+        const approvedTerms = this.terms.filter(t => t.status === 'approved');
+        for (const line of batch.lineIds
+          .map(id => this.project.lines.find(current => current.id === id))
+          .filter((line): line is SubtitleLine => Boolean(line) && !line!.isLocked)
+          .filter(line => line.cleanedText.replace(/\n/g, '[[NL]]') === inputMap.get(line.id))) {
+          // Manual edits or locks made after the request started take precedence.
+          if (line.isLocked || line.status !== 'Done' && line.status !== 'Fixing') continue;
           const qcIssues = QualityChecker.checkLine(
             line,
-            this.terms.filter(t => t.status === 'approved'),
+            approvedTerms,
             this.settings.readingSpeedCpsLimit,
             this.settings.maxLineLength
           );
           line.qcIssues = qcIssues;
-
           const lightIssue = qcIssues.find(i => i.severity === 'Nhẹ');
           if (lightIssue) {
             line.status = 'Fixing';
@@ -338,7 +397,6 @@ export class TranslationEngine {
             this.batchPlanner.setCachedTranslation(line.cleanedText, line.viText);
           }
         }
-
         this.notifyProjectUpdate();
 
         // If there are light issues, attempt auto-fix via Lite model
@@ -477,8 +535,24 @@ export class TranslationEngine {
   }
 
   private notifyProjectUpdate() {
-    this.project.updatedAt = Date.now();
-    this.onProjectChange({ ...this.project });
-    appStorage.saveProject(this.project);
+    this.project.updatedAt = Math.max(Date.now(), this.project.updatedAt + 1);
+    // Never let React/IndexedDB retain mutable references to the live worker data.
+    // This also prevents a later batch from changing an earlier UI snapshot.
+    const snapshot: SubtitleProject = {
+      ...this.project,
+      lines: this.project.lines.map(line => ({
+        ...line,
+        qcIssues: line.qcIssues?.map(issue => ({ ...issue }))
+      }))
+    };
+    this.onProjectChange(snapshot);
+    // Serialize writes: slower IndexedDB transactions must not overwrite newer
+    // batch progress. In-memory UI updates remain immediate.
+    this.persistenceQueue = this.persistenceQueue
+      .catch(() => undefined)
+      .then(() => appStorage.saveProject(snapshot))
+      .catch(error => {
+        logger.log({ type: 'LỖI', level: 'warn', message: `Lưu tiến độ thất bại: ${String(error)}` });
+      });
   }
 }

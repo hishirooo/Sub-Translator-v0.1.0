@@ -56,7 +56,7 @@ export class BatchPlanner {
     const targetLines = lines.filter(l => {
       if (l.isLocked) return false;
       if (onlyWaitingOrError) {
-        return l.status === 'Waiting' || l.status === 'Error';
+        return l.status === 'Waiting';
       }
       return true;
     });

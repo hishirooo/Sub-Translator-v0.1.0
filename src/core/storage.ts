@@ -5,7 +5,7 @@ const DB_VERSION = 1;
 
 export const DEFAULT_MODELS: ModelConfig[] = [
   {
-    id: 'gemini-2.5-flash',
+    id: 'gemini-3.8-flash',
     displayName: '3.8 Flash',
     role: 'translate',
     priority: 1,
@@ -18,7 +18,7 @@ export const DEFAULT_MODELS: ModelConfig[] = [
     isAvailable: true
   },
   {
-    id: 'gemini-2.0-flash',
+    id: 'gemini-flash-latest',
     displayName: '3.7 Flash',
     role: 'translate',
     priority: 2,
@@ -31,7 +31,7 @@ export const DEFAULT_MODELS: ModelConfig[] = [
     isAvailable: true
   },
   {
-    id: 'gemini-2.5-pro',
+    id: 'gemini-3.1-pro-preview',
     displayName: '3.1 Pro',
     role: 'pro-backup',
     priority: 3,
@@ -44,7 +44,7 @@ export const DEFAULT_MODELS: ModelConfig[] = [
     isAvailable: true
   },
   {
-    id: 'gemini-2.0-flash-lite',
+    id: 'gemini-3.1-flash-lite',
     displayName: '3.1 Flash Lite',
     role: 'lite-fix',
     priority: 1,
@@ -57,7 +57,7 @@ export const DEFAULT_MODELS: ModelConfig[] = [
     isAvailable: true
   },
   {
-    id: 'gemini-2.5-flash-lite',
+    id: 'gemini-3.1-flash-lite',
     displayName: '3.5 Flash Lite',
     role: 'lite-fix',
     priority: 2,
@@ -83,6 +83,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
   readingSpeedCpsLimit: 20,
   maxLineLength: 42
 };
+
+// Helper to upgrade any outdated model IDs saved in previous sessions
+function upgradeModelId(modelId: string): string {
+  if (modelId === 'gemini-2.5-flash' || modelId === 'gemini-2.0-flash' || modelId === 'gemini-1.5-flash') {
+    return 'gemini-3.8-flash';
+  }
+  if (modelId === 'gemini-2.0-flash-lite' || modelId === 'gemini-2.5-flash-lite' || modelId === 'gemini-1.5-flash-lite') {
+    return 'gemini-3.1-flash-lite';
+  }
+  if (modelId === 'gemini-2.5-pro' || modelId === 'gemini-2.0-pro' || modelId === 'gemini-1.5-pro') {
+    return 'gemini-3.1-pro-preview';
+  }
+  return modelId;
+}
 
 export class AppStorage {
   private dbPromise: Promise<IDBDatabase>;
@@ -198,11 +212,17 @@ export class AppStorage {
       const req = store.get('app_settings');
       req.onsuccess = () => {
         if (req.result && req.result.data) {
-          // Merge with default models in case new models were added
           const saved = req.result.data as AppSettings;
           const mergedModels = DEFAULT_MODELS.map(def => {
-            const existing = saved.models?.find(m => m.id === def.id || m.displayName === def.displayName);
-            return existing ? { ...def, ...existing } : def;
+            const existing = saved.models?.find(m => m.displayName === def.displayName);
+            if (existing) {
+              return {
+                ...def,
+                ...existing,
+                id: upgradeModelId(existing.id)
+              };
+            }
+            return def;
           });
           resolve({ ...DEFAULT_SETTINGS, ...saved, models: mergedModels });
         } else {

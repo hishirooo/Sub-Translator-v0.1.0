@@ -1,8 +1,28 @@
 # Sub Translator — AI Studio Build
 
-**Phiên bản mã nguồn thử nghiệm:** 0.1.0 (10/10/2026)
+**Phiên bản mã nguồn thử nghiệm:** 0.1.2 (10/10/2026)
 
 Web app React + TypeScript + Vite + Node/Express tích hợp Gemini API qua SDK `@google/genai` (API key **chỉ nằm ở server**). Mục tiêu: dịch subtitle Trung, Nhật, Hàn, Anh → Việt theo kế hoạch `ke-hoach-sub-translator.md`.
+
+## Bản sửa v0.1.2 (10/10/2026) — thanh tổng quan gọn
+
+- Bốn ô Total/Processing/Done/Error-Waiting được đổi thành **một dải 34px**, giảm đáng kể diện tích ở đầu màn hình.
+- Nhãn và giá trị trên cùng một dòng: **Tổng dòng**, **Đang xử lý**, **Hoàn thành**, **Lỗi / Chờ**.
+- **Bấm để lọc như trước**; đường xanh nhỏ đánh dấu bộ lọc đang chọn, thao tác bằng bàn phím được.
+- Màn hình nhỏ cho phép cuộn ngang dải tổng quan; không làm tăng chiều cao khu vực đọc/dịch.
+- Giữ nguyên toàn bộ phần dịch từng batch, định dạng phụ đề, QC, quota và lưu IndexedDB.
+
+## Bản sửa v0.1.1 (10/10/2026)
+
+- **Cập nhật trực tiếp theo từng batch:** khi Gemini trả về một batch, các bản dịch hợp lệ được đưa vào bảng và thống kê ngay, trước khi chờ các batch khác hoặc bước tự sửa Lite. Các bản sao trạng thái là bất biến để React hiển thị nhất quán trong chế độ song song.
+- **Autosave theo thứ tự:** từng snapshot tiến độ và các sửa tay được đưa vào cùng một hàng đợi ghi IndexedDB, tránh lần lưu cũ ghi đè lần lưu mới. Khi tạm dừng, các request đã gửi có thể hoàn tất; không tạo đè hai runner.
+- **Tách trạng thái và timecode:** STT và nhãn Waiting/Processing/Done/Fixing/Error hiển thị thành hai dòng trong một cột, không đè vào cột thời gian.
+- **CPS chỉ là cảnh báo đọc:** CPS = số ký tự hiển thị / thời lượng (giây). Mặc định 20; có thể chỉnh trong Cài đặt. Ký tự placeholder/tag bị loại khỏi phép tính, cảnh báo không kích hoạt tự sửa Lite.
+- **Tránh retry vô hạn:** dòng Error không tự quay lại hàng đợi liên tục; chọn nút dịch lại để đưa dòng về Waiting.
+- **An toàn khi thay file:** kết quả từ engine của file cũ không thay thế nội dung của file mới.
+- **Bảo mật:** không đóng gói tệp `.env` cục bộ (có thể chứa API key). Dùng `.env.example` hoặc AI Studio Secrets.
+
+**Các kiểm thử đi kèm:** `tests/engine-progress.spec.ts` — cập nhật từng batch với chế độ song song/tuần tự và cảnh báo CPS. Chạy bằng `npm test` sau khi cài dependencies.
 
 ## Cách chạy trong Google AI Studio Build
 
@@ -58,7 +78,7 @@ Kiểm thử (sau khi cài dependencies): `npm test`.
 - Tự nhận diện encoding cũ bằng heuristics, không đảm bảo tuyệt đối với file ngắn/đặc biệt; nên dùng nút chọn encoding để import lại nếu lỗi.
 - Parser giữ nguyên cấu trúc khi **giữ định dạng gốc**. Khi đổi ASS → SRT/VTT sẽ mất style/script info và cần kiểm tra đầu ra.
 - AI QC không thể cam kết 100% không sót từ hoặc sai nghĩa; người dùng nên duyệt thủ công trước phát hành.
-- Một số tiện ích ưu tiên trung bình trong kế hoạch (video player, gộp/tách timecode, undo/redo xuyên dòng, tìm-thay thế regex, log raw request JSON) chưa có trong bản 0.1.0.
+- Một số tiện ích ưu tiên trung bình trong kế hoạch (video player, gộp/tách timecode, undo/redo xuyên dòng, tìm-thay thế regex, log raw request JSON) chưa có trong bản 0.1.2.
 - Dòng quá dài trong bảng ảo được đặt textarea có chiều cao cố định và thanh cuộn nội bộ thay vì tự giãn không giới hạn, để đảm bảo hiệu năng với hàng nghìn dòng.
 
 ## Cấu trúc mã

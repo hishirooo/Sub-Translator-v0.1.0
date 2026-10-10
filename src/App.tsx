@@ -92,8 +92,12 @@ export const App: React.FC = () => {
           loadedTerms,
           loadedSettings,
           router,
-          (p) => setProject({ ...p }),
-          (s) => setEngineStatus(s)
+          (p) => {
+            if (engineRef.current === engine) setProject(p);
+          },
+          (s) => {
+            if (engineRef.current === engine) setEngineStatus(s);
+          }
         );
         engineRef.current = engine;
       }
@@ -112,20 +116,24 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Update engine when project, terms or settings change
+  // Keep the engine's in-flight batch data authoritative. React receives immutable
+  // snapshots from the engine; feeding snapshots back on every render can rewind
+  // newer batches when multiple API requests resolve at nearly the same time.
   useEffect(() => {
     if (engineRef.current) {
-      if (project) engineRef.current.updateProject(project);
       engineRef.current.updateTerms(terms);
       engineRef.current.updateSettings(settings);
     }
-  }, [project, terms, settings]);
+  }, [terms, settings]);
 
   // File loading handler
   const handleFileLoad = (content: string, fileName: string, encoding = 'UTF-8') => {
     try {
+      // Prevent an old file's unfinished network responses from replacing the new file.
+      engineRef.current?.pause();
       const parsedProject = parseSubtitleFile(content, fileName, encoding);
       setProject(parsedProject);
+      setEngineStatus('idle');
       appStorage.saveProject(parsedProject);
 
       if (!routerRef.current) {
@@ -139,8 +147,12 @@ export const App: React.FC = () => {
         terms,
         settings,
         routerRef.current,
-        (p) => setProject({ ...p }),
-        (s) => setEngineStatus(s)
+        (p) => {
+          if (engineRef.current === engine) setProject(p);
+        },
+        (s) => {
+          if (engineRef.current === engine) setEngineStatus(s);
+        }
       );
       engineRef.current = engine;
 
@@ -244,6 +256,15 @@ export const App: React.FC = () => {
     });
   };
 
+  // Send manual edits through the engine's ordered IndexedDB persistence queue.
+  const commitProjectEdit = (next: SubtitleProject) => {
+    if (engineRef.current) engineRef.current.updateProject(next);
+    else {
+      setProject(next);
+      void appStorage.saveProject(next);
+    }
+  };
+
   // Line editing
   const handleUpdateRawText = (lineId: number, newRaw: string) => {
     if (!project) return;
@@ -258,9 +279,8 @@ export const App: React.FC = () => {
       }
       return l;
     });
-    const newProj = { ...project, lines: updated };
-    setProject(newProj);
-    appStorage.saveProject(newProj);
+    const newProj = { ...project, lines: updated, updatedAt: Date.now() };
+    commitProjectEdit(newProj);
   };
 
   const handleUpdateViText = (lineId: number, newVi: string) => {
@@ -276,25 +296,22 @@ export const App: React.FC = () => {
       }
       return l;
     });
-    const newProj = { ...project, lines: updated };
-    setProject(newProj);
-    appStorage.saveProject(newProj);
+    const newProj = { ...project, lines: updated, updatedAt: Date.now() };
+    commitProjectEdit(newProj);
   };
 
   const handleToggleLock = (lineId: number) => {
     if (!project) return;
     const updated = project.lines.map(l => l.id === lineId ? { ...l, isLocked: !l.isLocked } : l);
-    const newProj = { ...project, lines: updated };
-    setProject(newProj);
-    appStorage.saveProject(newProj);
+    const newProj = { ...project, lines: updated, updatedAt: Date.now() };
+    commitProjectEdit(newProj);
   };
 
   const handleToggleDifficult = (lineId: number) => {
     if (!project) return;
     const updated = project.lines.map(l => l.id === lineId ? { ...l, isDifficult: !l.isDifficult } : l);
-    const newProj = { ...project, lines: updated };
-    setProject(newProj);
-    appStorage.saveProject(newProj);
+    const newProj = { ...project, lines: updated, updatedAt: Date.now() };
+    commitProjectEdit(newProj);
   };
 
   const handleResetLine = (lineId: number) => {
@@ -310,9 +327,8 @@ export const App: React.FC = () => {
       }
       return l;
     });
-    const newProj = { ...project, lines: updated };
-    setProject(newProj);
-    appStorage.saveProject(newProj);
+    const newProj = { ...project, lines: updated, updatedAt: Date.now() };
+    commitProjectEdit(newProj);
   };
 
   // Quick add term to dictionary from highlighted selection
@@ -381,7 +397,7 @@ export const App: React.FC = () => {
         <div className="brand-section">
           <div className="brand-title">
             <span>Sub Translator</span>
-            <span className="badge">v0.1.0</span>
+            <span className="badge">v0.1.2</span>
           </div>
 
           <div className={`server-badge ${health.hasApiKey ? '' : 'missing'}`}>
@@ -473,40 +489,52 @@ export const App: React.FC = () => {
 
       {/* Top Dashboard: Stats & Models Quotas */}
       <div className="top-dashboard">
-        <div className="stats-grid">
-          <div
+        <div className="stats-grid" role="group" aria-label="Thống kê và lọc dòng phụ đề">
+          <button
+            type="button"
             className={`stat-card total ${statusFilter === 'ALL' ? 'active' : ''}`}
             onClick={() => setStatusFilter('ALL')}
+            aria-pressed={statusFilter === 'ALL'}
+            title="Hiện tất cả dòng"
           >
-            <span className="stat-label">Total Lines</span>
-            <div className="stat-val">{stats.total}</div>
-          </div>
+            <span className="stat-label">Tổng dòng</span>
+            <span className="stat-val">{stats.total}</span>
+          </button>
 
-          <div
+          <button
+            type="button"
             className={`stat-card processing ${statusFilter === 'PROCESSING' ? 'active' : ''}`}
             onClick={() => setStatusFilter('PROCESSING')}
+            aria-pressed={statusFilter === 'PROCESSING'}
+            title="Lọc dòng đang dịch hoặc đang sửa"
           >
-            <span className="stat-label">Processing / Fixing</span>
-            <div className="stat-val">{stats.processing}</div>
-          </div>
+            <span className="stat-label">Đang xử lý</span>
+            <span className="stat-val">{stats.processing}</span>
+          </button>
 
-          <div
+          <button
+            type="button"
             className={`stat-card done ${statusFilter === 'DONE' ? 'active' : ''}`}
             onClick={() => setStatusFilter('DONE')}
+            aria-pressed={statusFilter === 'DONE'}
+            title="Lọc dòng đã hoàn thành"
           >
-            <span className="stat-label">Done</span>
-            <div className="stat-val">
+            <span className="stat-label">Hoàn thành</span>
+            <span className="stat-val">
               {stats.done} <span className="sub">({stats.progress}%)</span>
-            </div>
-          </div>
+            </span>
+          </button>
 
-          <div
+          <button
+            type="button"
             className={`stat-card error ${statusFilter === 'ERROR_WAITING' ? 'active' : ''}`}
             onClick={() => setStatusFilter('ERROR_WAITING')}
+            aria-pressed={statusFilter === 'ERROR_WAITING'}
+            title="Lọc dòng lỗi hoặc đang chờ"
           >
-            <span className="stat-label">Error / Waiting</span>
-            <div className="stat-val">{stats.errorWaiting}</div>
-          </div>
+            <span className="stat-label">Lỗi / Chờ</span>
+            <span className="stat-val">{stats.errorWaiting}</span>
+          </button>
         </div>
 
         {/* Quota cards for each model */}
@@ -580,7 +608,7 @@ export const App: React.FC = () => {
                   <div key={line.id} id={`line-${line.id}`} className={`sub-row ${hasError ? 'has-error' : ''}`}>
                     {/* Line ID & Status */}
                     <div className="col-id">
-                      <span>#{line.id}</span>
+                      <span className="line-number">#{line.id}</span>
                       <span className={`status-pill ${line.status}`}>{line.status}</span>
                     </div>
 
@@ -622,7 +650,7 @@ export const App: React.FC = () => {
                           marginTop: 2
                         }}>
                           <AlertTriangle size={11} />
-                          <span>{line.qcIssues[0].message}</span>
+                          <span title={line.qcIssues[0].type === 'too_long' ? 'CPS = ký tự hiển thị / thời lượng phụ đề. Đây là cảnh báo khả năng đọc, không phải lỗi dịch.' : undefined}>{line.qcIssues[0].message}</span>
                         </div>
                       )}
                     </div>
@@ -695,7 +723,7 @@ export const App: React.FC = () => {
           appStorage.saveTerms(newTerms);
         }}
         project={project}
-        scanModelId={settings.models.find(m => m.role === 'translate')?.id || 'gemini-2.5-flash'}
+        scanModelId={settings.models.find(m => m.role === 'translate')?.id || 'gemini-3.8-flash'}
       />
 
       {/* QC Modal */}
@@ -711,7 +739,7 @@ export const App: React.FC = () => {
             setTimeout(() => { el.style.backgroundColor = ''; }, 2000);
           }
         }}
-        qcModelId={settings.models.find(m => m.role === 'lite-fix')?.id || 'gemini-2.0-flash-lite'}
+        qcModelId={settings.models.find(m => m.role === 'lite-fix')?.id || 'gemini-3.1-flash-lite'}
       />
 
       {/* Settings Modal */}
