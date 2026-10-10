@@ -1,0 +1,5 @@
+{
+  "name": "Sub Translator • AI Studio",
+  "description": "Dịch phụ đề Trung, Nhật, Hàn, Anh sang tiếng Việt với Gemini API server-side, Model Router tối ưu RPM/RPD, kiểm tra và sửa lỗi tự động.",
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

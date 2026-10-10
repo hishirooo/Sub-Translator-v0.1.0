@@ -4,9 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"npm:dev:web\" \"npm:dev:api\"",
-    "dev:web": "vite --host 0.0.0.0",
-    "dev:api": "tsx watch server/index.ts",
+    "dev": "tsx watch server/index.ts",
     "build": "tsc --noEmit && vite build",
     "start": "tsx server/index.ts",
     "test": "vitest run"
