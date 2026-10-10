@@ -1,0 +1,10 @@
+Hãy mở dự án GitHub "Sub Translator" hiện đã import và CHẠY MÃ NGUỒN SẴN CÓ, không tạo ứng dụng mới từ đầu.
+
+- Đây là dự án React + TypeScript + Vite, có server Node/Express ở server/index.ts.
+- Đảm bảo `npm install`, `npm run dev` (Vite 5173 + API Node 3001), preview proxy /api hoạt động.
+- Khóa Gemini API cần nằm ở AI Studio Secrets -> GEMINI_API_KEY, tuyệt đối không đưa sang VITE_* hoặc client source.
+- Dùng server/index.ts gọi @google/genai; kiểm tra /api/health trả hasApiKey=true (không trả giá trị key).
+- Mở demo.srt để thử parser round-trip rồi test 3-5 dòng dịch, UI quota, log và export.
+- Không đổi logic Model Router, thứ tự model, 30s Flash protection, JSON schema, line IDs, hay bộ placeholder nếu không có lỗi rõ ràng.
+- Model IDs là các trường có thể chỉnh được trong Cài đặt; đừng tự gán tên khác.
+- Nếu gặp lỗi build/dependencies, chỉ sửa tương thích tối thiểu và báo lại file nào đã thay đổi.
